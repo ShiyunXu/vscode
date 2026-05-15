@@ -18,6 +18,7 @@ import { FinishedCallback, getRequestId, IIPCodeCitation, IResponseDelta } from 
 import { IChatEndpoint, ICreateEndpointBodyOptions, IEndpointBody } from '../../networking/common/networking';
 import { ChatCompletion, FinishedCompletionReason, rawMessageToCAPI } from '../../networking/common/openai';
 import { IToolDeferralService } from '../../networking/common/toolDeferralService';
+import { rawPartAsAnthropicCompactionData } from '../common/anthropicCompactionDataContainer';
 import { sendEngineMessagesTelemetry } from '../../networking/node/chatStream';
 import { IExperimentationService } from '../../telemetry/common/nullExperimentationService';
 import { ITelemetryService } from '../../telemetry/common/telemetry';
@@ -168,7 +169,7 @@ export function createMessagesRequestBody(accessor: ServicesAccessor, options: I
 
 	// Build context management configuration
 	const contextManagement = options.modelCapabilities?.enableContextEditing && isAnthropicContextEditingEnabled(endpoint, configurationService, experimentationService)
-		? getContextManagementFromConfig(configurationService, experimentationService, thinkingEnabled)
+		? getContextManagementFromConfig(configurationService, experimentationService, thinkingEnabled, endpoint.modelMaxPromptTokens)
 		: undefined;
 
 	const logService = accessor.get(ILogService);
@@ -448,6 +449,14 @@ function rawContentToAnthropicContent(content: readonly Raw.ChatCompletionConten
 								data: opaqueValue.thinking.encrypted,
 							});
 						}
+					}
+					// Check for Anthropic compaction data
+					const compactionSummary = rawPartAsAnthropicCompactionData(part);
+					if (compactionSummary !== undefined) {
+						convertedContent.push({
+							type: 'compaction',
+							summary: compactionSummary,
+						} as unknown as ContentBlockParam);
 					}
 				}
 				break;
@@ -812,9 +821,13 @@ export async function processNonStreamingResponseFromMessagesEndpoint(
 					// Intentionally not surfaced — see function JSDoc.
 					break;
 				default: {
+					const blockType = (block as { type: string }).type;
+					if (blockType === 'compaction') {
+						// Server-side compaction summary — not surfaced to user, but kept for pass-back via opaque parts
+						break;
+					}
 					// Parity with streaming path: log + emit telemetry for unknown block types
-					const unknownType = (block as { type: string }).type;
-					logService.warn(`[messagesAPI] non-streaming: unknown content_block type '${unknownType}' for model ${parsed.model}`);
+					logService.warn(`[messagesAPI] non-streaming: unknown content_block type '${blockType}' for model ${parsed.model}`);
 					/* __GDPR__
 						"messagesApi.unknownContentBlock" : {
 							"owner": "bhavyaus",
@@ -827,7 +840,7 @@ export async function processNonStreamingResponseFromMessagesEndpoint(
 					telemetryService.sendMSFTTelemetryEvent('messagesApi.unknownContentBlock', {
 						requestId,
 						model: parsed.model,
-						blockType: unknownType,
+						blockType: blockType,
 					});
 					break;
 				}
@@ -922,6 +935,7 @@ export class AnthropicMessagesProcessor {
 	private textAccumulator: string = '';
 	private toolCallAccumulator: Map<number, { id: string; name: string; arguments: string }> = new Map();
 	private thinkingAccumulator: Map<number, { thinking: string; signature: string }> = new Map();
+	private compactionAccumulator: Map<number, string> = new Map();
 	private completedToolCalls: Array<{ id: string; name: string; arguments: string }> = [];
 	private messageId: string = '';
 	private model: string = '';
@@ -1040,6 +1054,9 @@ export class AnthropicMessagesProcessor {
 							encrypted: data,
 						}
 					});
+				} else if ((chunk.content_block as { type: string })?.type === 'compaction' && chunk.index !== undefined) {
+					// Server-side compaction block — accumulate for pass-back but don't surface to user
+					this.compactionAccumulator.set(chunk.index, '');
 				}
 				return;
 			case 'content_block_delta':
@@ -1081,6 +1098,14 @@ export class AnthropicMessagesProcessor {
 								}],
 							});
 						}
+					} else if ((chunk.delta as { type: string }).type === 'compaction_delta' && chunk.index !== undefined) {
+						const summary = (chunk.delta as { type: string; summary?: string }).summary;
+						if (summary) {
+							const existing = this.compactionAccumulator.get(chunk.index);
+							if (existing !== undefined) {
+								this.compactionAccumulator.set(chunk.index, existing + summary);
+							}
+						}
 					}
 				}
 				return;
@@ -1109,6 +1134,15 @@ export class AnthropicMessagesProcessor {
 							}
 						});
 						this.thinkingAccumulator.delete(chunk.index);
+					}
+					const compactionSummary = this.compactionAccumulator.get(chunk.index);
+					if (compactionSummary !== undefined) {
+						// Emit compaction summary via delta for the tool calling loop to store
+						onProgress({
+							text: '',
+							anthropicCompaction: compactionSummary,
+						});
+						this.compactionAccumulator.delete(chunk.index);
 					}
 				}
 				return;

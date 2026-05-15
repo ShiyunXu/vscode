@@ -16,7 +16,7 @@ import { ChatFetchResponseType, ChatLocation, ChatResponse } from '../../chat/co
 import { getTextPart } from '../../chat/common/globalStringUtils';
 import { CHAT_MODEL, ConfigKey, IConfigurationService } from '../../configuration/common/configurationService';
 import { ILogService } from '../../log/common/logService';
-import { isAnthropicContextEditingEnabled } from '../../networking/common/anthropic';
+import { isAnthropicCompactionEnabled, isAnthropicContextEditingEnabled } from '../../networking/common/anthropic';
 import { FinishedCallback, getRequestId, ICopilotToolCall, OptionalChatRequestParams } from '../../networking/common/fetch';
 import { IFetcherService, Response } from '../../networking/common/fetcherService';
 import { createCapiRequestBody, IChatEndpoint, IChatEndpointTokenPricing, ICreateEndpointBodyOptions, IEndpointBody, IMakeChatRequestOptions } from '../../networking/common/networking';
@@ -238,6 +238,9 @@ export class ChatEndpoint implements IChatEndpoint {
 		}
 		if (isAnthropicContextEditingEnabled(this, this._configurationService, this._expService)) {
 			betas.push('context-management-2025-06-27');
+		}
+		if (isAnthropicCompactionEnabled(this, this._configurationService, this._expService)) {
+			betas.push('compact-2026-01-12');
 		}
 		return betas.length > 0 ? { 'anthropic-beta': betas.join(',') } : {};
 	}

@@ -12,7 +12,7 @@ import { CustomDataPartMimeTypes } from '../../../platform/endpoint/common/endpo
 import { modelSupportsToolSearch } from '../../../platform/endpoint/common/chatModelCapabilities';
 import { buildToolInputSchema } from '../../../platform/endpoint/node/messagesApi';
 import { ILogService } from '../../../platform/log/common/logService';
-import { ContextManagementResponse, CUSTOM_TOOL_SEARCH_NAME, getContextManagementFromConfig, isAnthropicContextEditingEnabled, modelSupportsMemory } from '../../../platform/networking/common/anthropic';
+import { ContextManagementResponse, CUSTOM_TOOL_SEARCH_NAME, getContextManagementFromConfig, isAnthropicCompactionEnabled, isAnthropicContextEditingEnabled, modelSupportsMemory } from '../../../platform/networking/common/anthropic';
 import { IToolDeferralService } from '../../../platform/networking/common/toolDeferralService';
 import { IResponseDelta, OpenAiFunctionTool } from '../../../platform/networking/common/fetch';
 import { APIUsage } from '../../../platform/networking/common/openai';
@@ -249,6 +249,9 @@ export class AnthropicLMProvider extends AbstractLanguageModelChatProvider {
 			}
 			if (hasMemoryTool || contextManagement) {
 				betas.push('context-management-2025-06-27');
+			}
+			if (isAnthropicCompactionEnabled(model.id, this._configurationService, this._experimentationService)) {
+				betas.push('compact-2026-01-12');
 			}
 			if (toolSearchEnabled) {
 				betas.push('advanced-tool-use-2025-11-20');

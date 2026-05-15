@@ -10,6 +10,7 @@ export namespace CustomDataPartMimeTypes {
 	export const ContextManagement = 'context_management';
 	export const PhaseData = 'phase_data';
 	export const Usage = 'usage';
+	export const AnthropicCompaction = 'anthropic_compaction';
 }
 
 export const CacheType = 'ephemeral';

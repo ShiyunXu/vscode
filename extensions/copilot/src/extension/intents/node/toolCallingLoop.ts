@@ -1357,6 +1357,7 @@ export abstract class ToolCallingLoop<TOptions extends IToolCallingLoopOptions =
 		const enableThinking = !shouldDisableThinking;
 		let phase: string | undefined;
 		let compaction: OpenAIContextManagementResponse | undefined;
+		let anthropicCompactionSummary: string | undefined;
 		markChatExt(this.options.conversation.sessionId, ChatExtPerfMark.WillFetch);
 		const fetchResult = await this.fetch({
 			messages: this.applyMessagePostProcessing(effectiveBuildPromptResult.messages, { stripOrphanedToolCalls: isGeminiFamily(endpoint) }),
@@ -1383,6 +1384,9 @@ export abstract class ToolCallingLoop<TOptions extends IToolCallingLoopOptions =
 				}
 				if (delta.contextManagement && isOpenAIContextManagementResponse(delta.contextManagement)) {
 					compaction = delta.contextManagement;
+				}
+				if (delta.anthropicCompaction) {
+					anthropicCompactionSummary = delta.anthropicCompaction;
 				}
 				return stopEarly ? text.length : undefined;
 			},
@@ -1486,6 +1490,7 @@ export abstract class ToolCallingLoop<TOptions extends IToolCallingLoopOptions =
 					phase,
 					modelId: endpoint.model,
 					compaction,
+					anthropicCompaction: anthropicCompactionSummary,
 				}),
 				chatResult,
 				hadIgnoredFiles: buildPromptResult.hasIgnoredFiles,

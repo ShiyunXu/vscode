@@ -676,6 +676,8 @@ export namespace ConfigKey {
 		export const ConversationCompactionUseAgenticProxy = defineSetting<boolean>('chat.conversationCompaction.useAgenticProxy', ConfigType.ExperimentBased, false);
 		/** Model to use for conversation-history compaction. When useAgenticProxy is true, the value is forwarded to the agentic proxy as the model name (defaulting to 'trajectory-compaction-v1' if empty). When false, an empty value preserves the main agent model. */
 		export const ConversationCompactionModel = defineSetting<string>('chat.conversationCompaction.model', ConfigType.ExperimentBased, '');
+		/** Direct endpoint for conversation-history compaction (bypasses proxy). JSON string: {"url":"...","model":"...","maxTokens":8192,"apiKey":"..."} */
+		export const ConversationCompactionDirectEndpoint = defineSetting<string>('chat.conversationCompaction.directEndpoint', ConfigType.ExperimentBased, '');
 
 		/** When enabled, the main agent's manage_todo_list tool is disabled and a background copilot-fast model maintains the todo list instead. */
 		export const BackgroundTodoAgentEnabled = defineSetting<boolean>('chat.agent.backgroundTodoAgent.enabled', ConfigType.ExperimentBased, false);
@@ -930,8 +932,8 @@ export namespace ConfigKey {
 
 	/** Use the Messages API instead of Chat Completions when supported */
 	export const UseAnthropicMessagesApi = defineSetting<boolean | undefined>('chat.anthropic.useMessagesApi', ConfigType.ExperimentBased, true);
-	/** Context editing mode for Anthropic Messages API. 'off' disables context editing. */
-	export const AnthropicContextEditingMode = defineSetting<'off' | 'clear-thinking' | 'clear-tooluse' | 'clear-both'>('chat.anthropic.contextEditing.mode', ConfigType.ExperimentBased, 'off');
+	/** Context editing mode for Anthropic Messages API. 'off' disables context editing. 'compact' enables server-side compaction. 'compact-and-clear' combines compaction with thinking/tool clearing. */
+	export const AnthropicContextEditingMode = defineSetting<'off' | 'clear-thinking' | 'clear-tooluse' | 'clear-both' | 'compact' | 'compact-and-clear'>('chat.anthropic.contextEditing.mode', ConfigType.ExperimentBased, 'off');
 	/** Configure reasoning summary style sent to Responses API */
 	export const ResponsesApiReasoningSummary = defineSetting<'off' | 'detailed'>('chat.responsesApiReasoningSummary', ConfigType.ExperimentBased, 'detailed');
 	/** Enable context_management sent to Responses API */

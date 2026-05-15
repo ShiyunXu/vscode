@@ -34,6 +34,8 @@ export interface IToolCallRound {
 	statefulMarker?: string;
 	/** Compaction data from the Responses API, round-tripped in outgoing requests */
 	compaction?: OpenAIContextManagementResponse;
+	/** Compaction summary from Anthropic compact_20260112, round-tripped in outgoing requests */
+	anthropicCompaction?: string;
 	/** Epoch millis (`Date.now()`) when this round started. */
 	timestamp?: number;
 	/**

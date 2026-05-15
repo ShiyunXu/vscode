@@ -64,14 +64,21 @@ export interface ClearThinkingEdit {
 	keep?: ContextManagementKeep;
 }
 
-export type ContextManagementEdit = ClearToolUsesEdit | ClearThinkingEdit;
+export interface CompactEdit {
+	type: 'compact_20260112';
+	trigger?: ContextManagementTrigger;
+	pause_after_compaction?: boolean;
+	instructions?: string;
+}
+
+export type ContextManagementEdit = ClearToolUsesEdit | ClearThinkingEdit | CompactEdit;
 
 export interface ContextManagement {
 	edits: ContextManagementEdit[];
 }
 
 export interface AppliedContextEdit {
-	type: 'clear_thinking_20251015' | 'clear_tool_uses_20250919';
+	type: 'clear_thinking_20251015' | 'clear_tool_uses_20250919' | 'compact_20260112';
 	cleared_thinking_turns?: number;
 	cleared_tool_uses?: number;
 	cleared_input_tokens?: number;
@@ -139,7 +146,23 @@ export function isAnthropicContextEditingEnabled(
 	return mode !== 'off';
 }
 
-export type ContextEditingMode = 'off' | 'clear-thinking' | 'clear-tooluse' | 'clear-both';
+/**
+ * Returns true when Anthropic server-side compaction (compact_20260112) is enabled.
+ * This requires both model support and a compact mode in the configuration.
+ */
+export function isAnthropicCompactionEnabled(
+	endpoint: IChatEndpoint | string,
+	configurationService: IConfigurationService,
+	experimentationService: IExperimentationService,
+): boolean {
+	if (!isAnthropicContextEditingEnabled(endpoint, configurationService, experimentationService)) {
+		return false;
+	}
+	const mode = configurationService.getExperimentBasedConfig(ConfigKey.AnthropicContextEditingMode, experimentationService);
+	return mode === 'compact' || mode === 'compact-and-clear';
+}
+
+export type ContextEditingMode = 'off' | 'clear-thinking' | 'clear-tooluse' | 'clear-both' | 'compact' | 'compact-and-clear';
 
 /**
  * Builds the context_management configuration object for the Messages API request.
@@ -149,7 +172,8 @@ export type ContextEditingMode = 'off' | 'clear-thinking' | 'clear-tooluse' | 'c
  */
 export function buildContextManagement(
 	mode: ContextEditingMode,
-	thinkingEnabled: boolean
+	thinkingEnabled: boolean,
+	maxPromptTokens?: number,
 ): ContextManagement | undefined {
 	if (mode === 'off') {
 		return undefined;
@@ -157,20 +181,31 @@ export function buildContextManagement(
 
 	const edits: ContextManagementEdit[] = [];
 
-	// Add thinking block clearing for clear-thinking and clear-both modes
-	if ((mode === 'clear-thinking' || mode === 'clear-both') && thinkingEnabled) {
+	// Add thinking block clearing for modes that include clear-thinking
+	if ((mode === 'clear-thinking' || mode === 'clear-both' || mode === 'compact-and-clear') && thinkingEnabled) {
 		edits.push({
 			type: 'clear_thinking_20251015',
 			keep: { type: 'thinking_turns', value: 1 },
 		});
 	}
 
-	// Add tool result clearing for clear-tooluse and clear-both modes
-	if (mode === 'clear-tooluse' || mode === 'clear-both') {
+	// Add tool result clearing for modes that include clear-tooluse
+	if (mode === 'clear-tooluse' || mode === 'clear-both' || mode === 'compact-and-clear') {
 		edits.push({
 			type: 'clear_tool_uses_20250919',
 			trigger: { type: 'input_tokens', value: 100000 },
 			keep: { type: 'tool_uses', value: 3 },
+		});
+	}
+
+	// Add compaction for compact modes
+	if (mode === 'compact' || mode === 'compact-and-clear') {
+		const compactTrigger = maxPromptTokens
+			? Math.max(50000, Math.floor(maxPromptTokens * 0.9))
+			: 150000;
+		edits.push({
+			type: 'compact_20260112',
+			trigger: { type: 'input_tokens', value: compactTrigger },
 		});
 	}
 
@@ -188,7 +223,8 @@ export function getContextManagementFromConfig(
 	configurationService: IConfigurationService,
 	experimentationService: IExperimentationService,
 	thinkingEnabled: boolean,
+	maxPromptTokens?: number,
 ): ContextManagement | undefined {
 	const mode = configurationService.getExperimentBasedConfig(ConfigKey.AnthropicContextEditingMode, experimentationService);
-	return buildContextManagement(mode, thinkingEnabled);
+	return buildContextManagement(mode, thinkingEnabled, maxPromptTokens);
 }

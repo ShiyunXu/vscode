@@ -151,6 +151,8 @@ export interface IResponseDelta {
 	statefulMarker?: string;
 	/** Context management information from Anthropic Messages API */
 	contextManagement?: ContextManagementResponse | OpenAIContextManagementResponse;
+	/** Compaction summary from Anthropic compact_20260112 */
+	anthropicCompaction?: string;
 }
 
 export function isOpenAIContextManagementResponse(value: ContextManagementResponse | OpenAIContextManagementResponse): value is OpenAIContextManagementResponse {
