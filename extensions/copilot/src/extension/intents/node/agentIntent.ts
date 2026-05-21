@@ -323,11 +323,13 @@ export class AgentIntent extends EditCodeIntent {
 		stream: vscode.ChatResponseStream,
 		token: vscode.CancellationToken
 	): Promise<vscode.ChatResult> {
+		this._logService.info(`[/compact] triggered. sessionId=${conversation.sessionId}, turns=${conversation.turns.length}`);
 		normalizeSummariesOnRounds(conversation.turns);
 
 		// Exclude the current /compact turn.
 		const history = conversation.turns.slice(0, -1);
 		if (history.length === 0) {
+			this._logService.info(`[/compact] nothing to compact — no history turns`);
 			stream.markdown(l10n.t('Nothing to compact. Start a conversation first.'));
 			return {};
 		}
@@ -335,15 +337,15 @@ export class AgentIntent extends EditCodeIntent {
 		// The summarization metadata needs to be associated with a tool call round.
 		const lastRoundId = history.at(-1)?.rounds.at(-1)?.id;
 		if (!lastRoundId) {
+			this._logService.info(`[/compact] nothing to compact — no tool call rounds`);
 			stream.markdown(l10n.t('Nothing to compact. Start a conversation with tool calls first.'));
 			return {};
 		}
 
+		// Always use the SDK pipeline (ConversationHistorySummarizer → resolveCompactionEndpoint → Fireworks)
+		// so the request is logged in both the Output panel and the Chat Debugger.
 		const endpoint = await this.endpointProvider.getChatEndpoint(request);
-		if (isResponsesCompactionContextManagementEnabled(endpoint, this.configurationService, this.expService)) {
-			stream.markdown(l10n.t('Compaction is already managed by context management for this session.'));
-			return {};
-		}
+		this._logService.info(`[/compact] SDK path: mainModel=${endpoint.model}, modelMaxPromptTokens=${endpoint.modelMaxPromptTokens} (compaction will use Fireworks via resolveCompactionEndpoint)`);
 
 		const availableTools = await this.instantiationService.invokeFunction(getAgentTools, request, endpoint);
 		const promptContext: IBuildPromptContext = {
@@ -370,12 +372,15 @@ export class AgentIntent extends EditCodeIntent {
 				maxToolResultLength: Infinity,
 			});
 			if (!propsInfo) {
+				this._logService.info(`[/compact] SDK path — nothing to compact (propsInfo is null)`);
 				stream.markdown(l10n.t('Nothing to compact yet.'));
 				return {};
 			}
 
+			this._logService.info(`[/compact] SDK path — rendering summarization prompt...`);
 			stream.progress(l10n.t('Compacting conversation...'));
 
+			const sdkStartTime = Date.now();
 			const progress: vscode.Progress<vscode.ChatResponseReferencePart | vscode.ChatResponseProgressPart> = {
 				report: () => { }
 			};
@@ -385,11 +390,15 @@ export class AgentIntent extends EditCodeIntent {
 				summarizationInstructions: request.prompt || undefined,
 			});
 			const result = await renderer.render(progress, token);
+			const sdkElapsed = Date.now() - sdkStartTime;
 			const summaryMetadata = result.metadata.get(SummarizedConversationHistoryMetadata);
 			if (!summaryMetadata) {
+				this._logService.warn(`[/compact] SDK path — no summary metadata after render (elapsed=${sdkElapsed}ms)`);
 				stream.markdown(l10n.t('Unable to compact conversation.'));
 				return {};
 			}
+
+			this._logService.info(`[/compact] SDK path — success: model=${summaryMetadata.model}, mode=${summaryMetadata.summarizationMode}, elapsed=${sdkElapsed}ms, summaryLength=${summaryMetadata.text.length}, usage=${JSON.stringify(summaryMetadata.usage)}`);
 
 			if (summaryMetadata.usage) {
 				stream.usage({
@@ -427,10 +436,12 @@ export class AgentIntent extends EditCodeIntent {
 			return chatResult;
 		} catch (e) {
 			if (isCancellationError(e)) {
+				this._logService.info(`[/compact] SDK path — cancelled`);
 				return {};
 			}
 
 			const message = e instanceof Error ? e.message : String(e);
+			this._logService.error(`[/compact] SDK path — failed: ${message}`);
 			stream.markdown(l10n.t('Failed to compact conversation: {0}', message));
 			return {};
 		}
@@ -524,10 +535,11 @@ export class AgentIntentInvocation extends EditCodeIntentInvocation implements I
 			this.configurationService.getConfig<number | undefined>(ConfigKey.Advanced.SummarizeAgentConversationHistoryThreshold) ?? effectiveMaxTokens,
 			effectiveMaxTokens
 		);
-		const useTruncation = this.endpoint.apiType === 'responses' && this.configurationService.getConfig(ConfigKey.Advanced.UseResponsesApiTruncation);
-		const responsesCompactionContextManagementEnabled = isResponsesCompactionContextManagementEnabled(this.endpoint, this.configurationService, this.expService);
-		const anthropicCompactionEnabled = isAnthropicCompactionEnabled(this.endpoint, this.configurationService, this.expService);
-		const summarizationEnabled = this.configurationService.getConfig(ConfigKey.SummarizeAgentConversationHistory) && this.prompt === AgentPrompt && !responsesCompactionContextManagementEnabled && !anthropicCompactionEnabled;
+		// OVERRIDE: Disable Responses API truncation so our Fireworks compaction handles context management
+		const useTruncation = false;
+		// OVERRIDE: Always use our Fireworks-based ConversationHistorySummarizer for compaction,
+		// regardless of model or prompt class. Disable server-side compaction (Anthropic compact beta, Responses API).
+		const summarizationEnabled = !!this.configurationService.getConfig(ConfigKey.SummarizeAgentConversationHistory);
 
 		// When tools are present, apply a 10% safety margin on the message portion
 		// to account for tokenizer discrepancies between our tool-token counter and

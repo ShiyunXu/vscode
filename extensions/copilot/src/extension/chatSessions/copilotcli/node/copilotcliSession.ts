@@ -1613,6 +1613,59 @@ export class CopilotCLISession extends DisposableStore implements ICopilotCLISes
 			switch (input.command) {
 				case 'compact': {
 					this._stream?.progress(l10n.t('Compacting conversation...'));
+
+					// Hardcoded Fireworks endpoint for testing custom compaction model
+					const fwUrl = 'https://api.fireworks.ai/inference/v1/chat/completions';
+					const fwModel = 'accounts/msft/deployments/ihfptseo';
+					const fwKey = 'fw_TEkpdC6pCejMpoqHD5XECM';
+
+					try {
+						this._logService.info(`[compaction] /compact using hardcoded Fireworks endpoint: ${fwUrl} model=${fwModel}`);
+
+						// Build messages from actual conversation history
+						const turns = this._sdkSession.getHistory?.() ?? [];
+						let conversationText = '';
+						if (turns.length > 0) {
+							for (const turn of turns) {
+								const role = (turn as { role?: string }).role ?? 'unknown';
+								const content = (turn as { content?: string }).content ?? '';
+								conversationText += `[${role}]: ${content.slice(0, 2000)}\n\n`;
+							}
+						} else {
+							conversationText = 'No conversation history available. This is a test of the compaction endpoint.';
+						}
+
+						const messages = [
+							{ role: 'system' as const, content: 'You are a conversation summarizer. Produce a concise summary preserving key technical details, file paths, decisions, and pending tasks.' },
+							{ role: 'user' as const, content: `Summarize the following conversation:\n\n${conversationText.slice(0, 30000)}` }
+						];
+						const resp = await fetch(fwUrl, {
+							method: 'POST',
+							headers: { 'Authorization': `Bearer ${fwKey}`, 'Content-Type': 'application/json' },
+							body: JSON.stringify({
+								model: fwModel, messages, max_tokens: 4096,
+								stream: false, temperature: 0,
+								repetition_penalty: 1.1,
+							}),
+						});
+						if (!resp.ok) {
+							const errText = await resp.text();
+							this._stream?.markdown(`**Fireworks endpoint error (${resp.status}):** ${errText}\n\nFalling back to SDK compaction.`);
+						} else {
+							const data = await resp.json() as { choices?: Array<{ message?: { content?: string; reasoning_content?: string } }> };
+							const summary = data.choices?.[0]?.message?.content || data.choices?.[0]?.message?.reasoning_content;
+							if (summary) {
+								this._stream?.markdown(`**✅ Compaction via Fireworks** (model: \`${fwModel}\`)\n\n${summary}`);
+							} else {
+								this._stream?.markdown(`**⚠️ Endpoint responded but no content.** Raw: ${JSON.stringify(data).slice(0, 500)}`);
+							}
+							break;
+						}
+					} catch (e) {
+						this._stream?.markdown(`**Direct endpoint error:** ${e}\n\nFalling back to SDK compaction.`);
+					}
+
+					// Fallback to SDK compaction
 					await this._sdkSession.initializeAndValidateTools();
 					this._sdkSession.currentMode = 'interactive';
 					const result = await this._sdkSession.compactHistory();

@@ -545,6 +545,7 @@ interface SummarizationResult {
 
 class ConversationHistorySummarizer {
 	private readonly summarizationId = generateUuid();
+	private _lastCompactionMessages: ChatMessage[] | undefined;
 
 	constructor(
 		private readonly props: SummarizedAgentHistoryProps,
@@ -608,20 +609,35 @@ class ConversationHistorySummarizer {
 		const forceMode = this.configurationService.getConfig<string | undefined>(ConfigKey.Advanced.AgentHistorySummarizationMode);
 		if (this.props.forceSimpleSummary && forceMode !== SummaryMode.Full) {
 			// Foreground budget-exceeded recovery — go straight to Simple.
-			return await this.getSummary(SummaryMode.Simple, propsInfo);
+			return await this.getSummaryWithRetry(SummaryMode.Simple, propsInfo);
 		}
 		if (forceMode === SummaryMode.Simple) {
-			return await this.getSummary(SummaryMode.Simple, propsInfo);
+			return await this.getSummaryWithRetry(SummaryMode.Simple, propsInfo);
 		} else {
 			try {
-				return await this.getSummary(SummaryMode.Full, propsInfo);
+				return await this.getSummaryWithRetry(SummaryMode.Full, propsInfo);
 			} catch (e) {
 				if (isCancellationError(e)) {
 					throw e;
 				}
 
-				return await this.getSummary(SummaryMode.Simple, propsInfo);
+				return await this.getSummaryWithRetry(SummaryMode.Simple, propsInfo);
 			}
+		}
+	}
+
+	/**
+	 * Retries getSummary once on transient failures (e.g. empty choices from the model endpoint).
+	 */
+	private async getSummaryWithRetry(mode: SummaryMode, propsInfo: ISummarizedConversationHistoryInfo): Promise<SummarizationResult> {
+		try {
+			return await this.getSummary(mode, propsInfo);
+		} catch (e) {
+			if (isCancellationError(e)) {
+				throw e;
+			}
+			this.logInfo(`First attempt failed, retrying once: ${e.message}`, mode);
+			return await this.getSummary(mode, propsInfo);
 		}
 	}
 
@@ -658,6 +674,7 @@ class ConversationHistorySummarizer {
 
 	private async getSummary(mode: SummaryMode, propsInfo: ISummarizedConversationHistoryInfo): Promise<SummarizationResult> {
 		const stopwatch = new StopWatch(false);
+		this.logInfo(`starting compaction request...`, mode);
 
 		// Allow a custom trajectory-compaction model to override the main agent
 		// endpoint via experiment-based config. When neither flag is set this
@@ -670,6 +687,7 @@ class ConversationHistorySummarizer {
 			this.endpointProvider,
 			this.logService,
 		);
+		this.logInfo(`compaction endpoint resolved: model=${compactionEndpoint.model}, maxPromptTokens=${compactionEndpoint.modelMaxPromptTokens}`, mode);
 
 		// In Full mode, tools are sent alongside the summarization prompt with
 		// tool_choice: 'none'. Reserve budget for them so the rendered messages
@@ -759,6 +777,8 @@ class ConversationHistorySummarizer {
 			}
 
 			promptTypes = messages.map(msg => `${msg.role}${'name' in msg && msg.name ? `-${msg.name}` : ''}:${getTextPart(msg.content).length}`).join(',');
+			this._lastCompactionMessages = messages;
+			this.logInfo(`sending makeChatRequest2: messageCount=${messages.length}, totalChars=${messages.reduce((s, m) => s + getTextPart(m.content).length, 0)}`, mode);
 			summaryResponse = await endpoint.makeChatRequest2({
 				debugName: `summarizeConversationHistory-${mode}`,
 				messages,
@@ -773,6 +793,7 @@ class ConversationHistorySummarizer {
 				enableRetryOnFilter: true,
 				interactionTypeOverride: 'conversation-compaction',
 			}, this.token ?? CancellationToken.None);
+			this.logInfo(`makeChatRequest2 completed: type=${summaryResponse.type}, elapsed=${stopwatch.elapsed()}ms`, mode);
 		} catch (e) {
 			this.logInfo(`Error from summarization request. ${e.message}`, mode);
 			this.sendSummarizationTelemetry('requestThrow', '', endpoint.model, mode, stopwatch.elapsed(), undefined, e instanceof Error ? e.message : String(e));
@@ -802,11 +823,35 @@ class ConversationHistorySummarizer {
 			const outcome = response.type;
 			this.sendSummarizationTelemetry(outcome, response.requestId, model, mode, elapsedTime, undefined, response.reason ?? response.type);
 			this.logInfo(`Summarization request failed. ${response.type} ${response.reason ?? response.type}`, mode);
+
+			// Dump the last compaction request to disk for debugging
+			if (this._lastCompactionMessages) {
+				try {
+					const fs = await import('fs');
+					const path = await import('path');
+					const os = await import('os');
+					const dumpPath = path.join(os.homedir(), `compaction_failed_${mode}_${Date.now()}.json`);
+					fs.writeFileSync(dumpPath, JSON.stringify({
+						mode,
+						model,
+						elapsedTime,
+						responseType: response.type,
+						reason: response.reason,
+						requestId: response.requestId,
+						messageCount: this._lastCompactionMessages.length,
+						messages: this._lastCompactionMessages,
+					}, null, 2));
+					this.logInfo(`Dumped failed compaction request to ${dumpPath}`, mode);
+				} catch {
+					// Ignore dump errors
+				}
+			}
+
 			if (response.type === ChatFetchResponseType.Canceled) {
 				throw new CancellationError();
 			}
 
-			throw new Error('Summarization request failed');
+			throw new Error(`Summarization request failed: ${response.type}`);
 		}
 
 		const summarySize = await this.sizing.countTokens(response.value);

@@ -41,8 +41,8 @@ export function getResponsesApiCompactionThreshold(configService: IConfiguration
 	}
 
 	return endpoint.modelMaxPromptTokens > 0
-		? Math.floor(endpoint.modelMaxPromptTokens * 0.9)
-		: 50000;
+		? Math.floor(endpoint.modelMaxPromptTokens * 0.1)
+		: 5000;
 }
 
 export function createResponsesRequestBody(accessor: ServicesAccessor, options: ICreateEndpointBodyOptions, model: string, endpoint: IChatEndpoint): IEndpointBody {

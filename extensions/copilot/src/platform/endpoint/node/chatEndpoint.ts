@@ -239,9 +239,10 @@ export class ChatEndpoint implements IChatEndpoint {
 		if (isAnthropicContextEditingEnabled(this, this._configurationService, this._expService)) {
 			betas.push('context-management-2025-06-27');
 		}
-		if (isAnthropicCompactionEnabled(this, this._configurationService, this._expService)) {
-			betas.push('compact-2026-01-12');
-		}
+		// OVERRIDE: Disabled — always use Fireworks-based compaction instead of Anthropic server-side compact
+		// if (isAnthropicCompactionEnabled(this, this._configurationService, this._expService)) {
+		// 	betas.push('compact-2026-01-12');
+		// }
 		return betas.length > 0 ? { 'anthropic-beta': betas.join(',') } : {};
 	}
 
