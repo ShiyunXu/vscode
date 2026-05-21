@@ -66,6 +66,8 @@ import { applyPatch5Description } from '../../tools/node/applyPatchTool';
 import { multiReplaceStringPrimaryDescription } from '../../tools/node/multiReplaceStringTool';
 import { replaceStringBatchDescription } from '../../tools/node/replaceStringTool';
 import { getAgentMaxRequests } from '../common/agentConfig';
+import { CapturingToken } from '../../../platform/requestLogger/common/capturingToken';
+import { IRequestLogger } from '../../../platform/requestLogger/common/requestLogger';
 import { addCacheBreakpoints } from './cacheBreakpoints';
 import { EditCodeIntent, EditCodeIntentInvocation, EditCodeIntentInvocationOptions, mergeMetadata, toNewChatReferences } from './editCodeIntent';
 import { ToolCallingLoop } from './toolCallingLoop';
@@ -237,6 +239,7 @@ export class AgentIntent extends EditCodeIntent {
 		@IChatSessionService chatSessionService: IChatSessionService,
 		@IAutomodeService private readonly _automodeService: IAutomodeService,
 		@ILogService private readonly _logService: ILogService,
+		@IRequestLogger private readonly _requestLogger: IRequestLogger,
 	) {
 		super(instantiationService, endpointProvider, configurationService, expService, codeMapperService, workspaceService, { intentInvocation: AgentIntentInvocation, processCodeblocks: false });
 		chatSessionService.onDidDisposeChatSession(sessionId => {
@@ -292,7 +295,18 @@ export class AgentIntent extends EditCodeIntent {
 		yieldRequested: () => boolean
 	): Promise<vscode.ChatResult> {
 		if (request.command === 'compact') {
-			return this.handleSummarizeCommand(conversation, request, stream, token);
+			// Wrap in a CapturingToken so the OTel span gets the correct chatSessionId
+			// and the compaction request appears in the Chat Debugger.
+			const capturingToken = new CapturingToken(
+				'/compact',
+				'comment',
+				undefined,
+				undefined,
+				request.sessionId,
+			);
+			return this._requestLogger.captureInvocation(capturingToken, () =>
+				this.handleSummarizeCommand(conversation, request, stream, token)
+			);
 		}
 
 		try {
