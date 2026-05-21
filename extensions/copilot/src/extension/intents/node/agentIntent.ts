@@ -68,6 +68,7 @@ import { replaceStringBatchDescription } from '../../tools/node/replaceStringToo
 import { getAgentMaxRequests } from '../common/agentConfig';
 import { CapturingToken } from '../../../platform/requestLogger/common/capturingToken';
 import { IRequestLogger } from '../../../platform/requestLogger/common/requestLogger';
+import { getCurrentCapturingToken, runWithCapturingToken } from '../../../platform/requestLogger/node/requestLogger';
 import { addCacheBreakpoints } from './cacheBreakpoints';
 import { EditCodeIntent, EditCodeIntentInvocation, EditCodeIntentInvocationOptions, mergeMetadata, toNewChatReferences } from './editCodeIntent';
 import { ToolCallingLoop } from './toolCallingLoop';
@@ -977,7 +978,15 @@ export class AgentIntentInvocation extends EditCodeIntentInvocation implements I
 		const associatedRequestId = promptContext.conversation?.getLatestTurn()?.id;
 		const conversationId = promptContext.conversation?.sessionId;
 
+		// Capture the current CapturingToken so the background compaction
+		// request gets the correct chatSessionId for Chat Debugger visibility.
+		// AsyncLocalStorage context may not propagate reliably to fire-and-forget
+		// async callbacks, so we snapshot and restore it explicitly.
+		const parentCapturingToken = getCurrentCapturingToken()
+			?? (conversationId ? new CapturingToken('/auto-compact', 'comment', undefined, undefined, conversationId) : undefined);
+
 		backgroundSummarizer.start(async bgToken => {
+			const doWork = async (): Promise<IBackgroundSummarizationResult> => {
 			try {
 				// Resolve the trajectory-compaction endpoint. When neither
 				// compaction config is set this returns `this.endpoint`
@@ -1140,6 +1149,13 @@ export class AgentIntentInvocation extends EditCodeIntentInvocation implements I
 
 				throw err;
 			}
+			};
+			// Run within the captured CapturingToken so OTel spans get the
+			// correct chatSessionId and appear in the Chat Debugger.
+			if (parentCapturingToken) {
+				return runWithCapturingToken(parentCapturingToken, doWork);
+			}
+			return doWork();
 		}, token);
 	}
 
