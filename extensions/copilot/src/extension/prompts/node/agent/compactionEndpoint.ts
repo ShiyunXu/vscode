@@ -124,19 +124,24 @@ class DirectCompactionEndpoint extends ChatEndpoint {
 			(body as Record<string, unknown>)['chat_template_kwargs'] = { enable_thinking: false };
 			(body as Record<string, unknown>)['reasoning_effort'] = 'none';
 
-			// Strip image content parts — the Fireworks Qwen endpoint
-			// does not support vision and rejects requests with images.
+			// Replace image content parts with text placeholders — the
+			// Fireworks Qwen endpoint does not support vision. Converting
+			// to text preserves the fact that an image was shared so the
+			// compaction summary can reference it.
 			if (body.messages) {
 				for (const msg of body.messages) {
 					if (Array.isArray(msg.content)) {
-						msg.content = msg.content.filter(
-							(part: Record<string, unknown>) => part.type !== 'image_url'
+						msg.content = msg.content.map(
+							(part: Record<string, unknown>) => {
+								if (part.type === 'image_url') {
+									return { type: 'text', text: '[User shared an image]' };
+								}
+								return part;
+							}
 						);
-						// Collapse to plain string if only text remains
+						// Collapse to plain string if only text parts remain
 						if (msg.content.length === 1 && msg.content[0].type === 'text') {
 							msg.content = msg.content[0].text;
-						} else if (msg.content.length === 0) {
-							msg.content = '';
 						}
 					}
 				}
